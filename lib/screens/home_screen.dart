@@ -1,146 +1,72 @@
 import 'package:bluetooth_pruebas/viewmodels/bluetooth_viewmodel.dart';
+import 'package:bluetooth_pruebas/widgets/device_list_widget.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:provider/provider.dart';
 
-class HomeScreen extends StatefulWidget {
-  @override
-  _HomeScreenState createState() => _HomeScreenState();
-}
-
-class _HomeScreenState extends State<HomeScreen> {
-  bool isBluetoothOn = false;
-  bool isScanning = false;
-  List<BluetoothDevice> devices = [];
-  Map<Permission, bool> permissionsStatus = {
-    Permission.bluetooth: false,
-    Permission.bluetoothScan: false,
-    Permission.bluetoothConnect: false,
-    Permission.location: false,
-  };
-
-  @override
-  void initState() {
-    super.initState();
-    _checkPermissionsAndBluetooth();
-  }
-
-  // Verifica permisos y estado del Bluetooth
-  Future<void> _checkPermissionsAndBluetooth() async {
-    await _checkPermissions();
-    await _checkBluetoothStatus();
-  }
-
-  // Verifica los permisos uno por uno
-  Future<void> _checkPermissions() async {
-    for (var permission in permissionsStatus.keys) {
-      permissionsStatus[permission] = await permission.isGranted;
-      if (!permissionsStatus[permission]!) {
-        await permission.request();
-        permissionsStatus[permission] = await permission.isGranted;
-      }
-    }
-    setState(() {});
-  }
-
-  // Verifica y enciende el Bluetooth si es necesario
-  Future<void> _checkBluetoothStatus() async {
-    BluetoothAdapterState bluetoothState = await FlutterBluePlus.adapterState.first;
-    if (bluetoothState == BluetoothAdapterState.off) {
-      await FlutterBluePlus.turnOn();
-      await Future.delayed(Duration(seconds: 2));
-      bluetoothState = await FlutterBluePlus.adapterState.first;
-    }
-    setState(() {
-      isBluetoothOn = bluetoothState == BluetoothAdapterState.on;
-    });
-  }
-
-  // Inicia el escaneo de dispositivos
-  Future<void> _startScan() async {
-    if (!isBluetoothOn) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Bluetooth is not enabled.')),
-      );
-      return;
-    }
-
-    setState(() {
-      isScanning = true;
-      devices.clear();
-    });
-
-    FlutterBluePlus.onScanResults.listen((results) {
-      if (results.isNotEmpty) {
-        setState(() {
-          devices = results.map((result) => result.device).toList();
-        });
-      }
-    });
-
-    await FlutterBluePlus.startScan(timeout: Duration(seconds: 30));
-
-    // Verifica si no se encontraron dispositivos
-    if (devices.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No devices found during the scan.')),
-      );
-    }
-
-    setState(() {
-      isScanning = false;
-    });
-  }
+class HomeScreen extends StatelessWidget {
+  const HomeScreen({Key? key}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
+    final bluetoothViewModel = Provider.of<BluetoothViewModel>(context);
+
     return Scaffold(
       appBar: AppBar(
-        title: Text('Bluetooth Scanner'),
+        title: const Text('Bluetooth Scanner'),
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            Text('Permissions Status:', style: TextStyle(fontWeight: FontWeight.bold)),
-            ...permissionsStatus.entries.map((entry) => ListTile(
-                  title: Text(entry.key.toString().split('.').last),
-                  trailing: Icon(
-                    entry.value ? Icons.check_circle : Icons.error,
-                    color: entry.value ? Colors.green : Colors.red,
-                  ),
-                )),
-            SizedBox(height: 20),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('Bluetooth:'),
-                Icon(
-                  isBluetoothOn ? Icons.check_circle : Icons.error,
-                  color: isBluetoothOn ? Colors.green : Colors.red,
-                ),
-              ],
+            const Text(
+              'Permisos y Estado de Bluetooth',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
-            SizedBox(height: 20),
+            const SizedBox(height: 16),
+            FutureBuilder<bool>(
+              future: bluetoothViewModel.requestPermissions(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const CircularProgressIndicator();
+                } else if (snapshot.hasData && snapshot.data!) {
+                  return const Icon(Icons.check, color: Colors.green);
+                } else {
+                  return const Icon(Icons.close, color: Colors.red);
+                }
+              },
+            ),
+            const SizedBox(height: 16),
             ElevatedButton(
-              onPressed: isScanning ? null : _startScan,
-              child: Text(isScanning ? 'Scanning...' : 'Start Scan'),
+              onPressed: bluetoothViewModel.startScanning,
+              child: bluetoothViewModel.isScanning
+                  ? const CircularProgressIndicator(color: Colors.white)
+                  : const Text('Buscar dispositivos'),
             ),
-            SizedBox(height: 20),
+            const SizedBox(height: 16),
+            const Text(
+              'Dispositivos encontrados:',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
             Expanded(
-              child: devices.isEmpty
-                  ? Center(child: Text('No devices found.'))
-                  : ListView.builder(
-                      itemCount: devices.length,
-                      itemBuilder: (context, index) {
-                        return ListTile(
-                          title: Text(devices[index].name.isEmpty
-                              ? 'Unknown Device'
-                              : devices[index].name),
-                          subtitle: Text(devices[index].id.toString()),
-                        );
-                      },
-                    ),
+              child: ListView.builder(
+                itemCount: bluetoothViewModel.scanResults.length,
+                itemBuilder: (context, index) {
+                  final result = bluetoothViewModel.scanResults[index];
+                  return ListTile(
+                    title: Text(result.device.name.isNotEmpty
+                        ? result.device.name
+                        : 'Dispositivo sin nombre'),
+                    subtitle: Text(result.device.remoteId.toString()),
+                    trailing: bluetoothViewModel.isConnecting
+                        ? const CircularProgressIndicator()
+                        : ElevatedButton(
+                            onPressed: () =>
+                                bluetoothViewModel.connectToDevice(result.device),
+                            child: const Text('Conectar'),
+                          ),
+                  );
+                },
+              ),
             ),
           ],
         ),

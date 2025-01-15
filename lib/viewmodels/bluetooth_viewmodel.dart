@@ -3,93 +3,95 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter/material.dart';
 
 class BluetoothViewModel extends ChangeNotifier {
-  FlutterBluePlus flutterBlue = FlutterBluePlus();  // Instanciamos sin usar `instance`
+  FlutterBluePlus flutterBlue = FlutterBluePlus();
   bool isScanning = false;
-  List<BluetoothDevice> devices = [];
-  bool isLoading = false;
+  bool isConnecting = false;
+  List<ScanResult> scanResults = [];
+  BluetoothDevice? connectedDevice;
 
-  bool isBluetoothGranted = false;
-  bool isBluetoothScanGranted = false;
-  bool isBluetoothConnectGranted = false;
-  bool isLocationGranted = false;
+  get devices => null;
 
-  // Verificación de permisos
-  Future<void> checkPermissions() async {
-    var status = await [
-      Permission.bluetooth,
-      Permission.bluetoothScan,
-      Permission.bluetoothConnect,
-      Permission.location,
-    ].request();
+  // Solicitar y verificar permisos
+  Future<bool> requestPermissions() async {
+  Map<Permission, PermissionStatus> statuses = await [
+    Permission.bluetooth,
+    Permission.bluetoothScan,
+    Permission.bluetoothConnect,
+    Permission.location
+  ].request();
 
-    // Actualizamos los estados de los permisos
-    isBluetoothGranted = status[Permission.bluetooth] == PermissionStatus.granted;
-    isBluetoothScanGranted = status[Permission.bluetoothScan] == PermissionStatus.granted;
-    isBluetoothConnectGranted = status[Permission.bluetoothConnect] == PermissionStatus.granted;
-    isLocationGranted = status[Permission.location] == PermissionStatus.granted;
+  // Verificar si todos los permisos fueron concedidos
+  return statuses.values.every((status) => status.isGranted);
+}
 
-    notifyListeners();
-  }
-
-  // Verificar el estado de Bluetooth
-  Future<bool> _checkBluetoothStatus() async {
-    BluetoothAdapterState bluetoothState = await FlutterBluePlus.adapterState.first;
-    if (bluetoothState == BluetoothAdapterState.off) {
-      print('Bluetooth is off, trying to turn it on...');
-      await FlutterBluePlus.turnOn(); // Intentar encender el Bluetooth
+  // Verificar estado del Bluetooth
+  Future<bool> checkBluetoothStatus() async {
+    BluetoothAdapterState state = await FlutterBluePlus.adapterState.first;
+    if (state == BluetoothAdapterState.off) {
+      await FlutterBluePlus.turnOn();
       await Future.delayed(const Duration(seconds: 2));
-      bluetoothState = await FlutterBluePlus.adapterState.first;  // Reconsultamos el estado
+      state = await FlutterBluePlus.adapterState.first;
     }
-    return bluetoothState == BluetoothAdapterState.on;
+    return state == BluetoothAdapterState.on;
   }
 
-  // Iniciar el escaneo
+  // Iniciar escaneo
   Future<void> startScanning() async {
-    // Verificar Bluetooth y permisos antes de iniciar el escaneo
-    if (!isBluetoothGranted || !isBluetoothScanGranted || !isBluetoothConnectGranted || !isLocationGranted) {
-      print('Some permissions are missing');
+    if (!await requestPermissions()) {
+      print("Permisos no concedidos.");
       return;
     }
 
-    isLoading = true;
-    notifyListeners();
-
-    bool bluetoothReady = await _checkBluetoothStatus();
-    if (!bluetoothReady) {
-      print('Bluetooth is not ready');
-      isLoading = false;
-      notifyListeners();
+    if (!await checkBluetoothStatus()) {
+      print("Bluetooth no está encendido.");
       return;
     }
 
     isScanning = true;
-    devices.clear();  // Limpiar la lista de dispositivos antes de empezar
+    scanResults.clear();
     notifyListeners();
 
-    // Iniciar escaneo
-    print('Starting Bluetooth scan...');
-    FlutterBluePlus.startScan(timeout: const Duration(seconds: 40));
-
+    await FlutterBluePlus.startScan(timeout: const Duration(seconds: 30));
     FlutterBluePlus.scanResults.listen((results) {
-      if (results.isNotEmpty) {
-        print("Found devices: ${results.length}");
-        devices = results.map((result) => result.device).toList();
-      } else {
-        print("No devices found.");
-      }
-      isScanning = false;
-      isLoading = false;  // Detener el indicador de carga
+      scanResults = results;
       notifyListeners();
+    }).onError((e) {
+      print("Error al escanear: $e");
     });
 
-    // Detener escaneo si se excede el tiempo
-    FlutterBluePlus.isScanning.listen((isScanningActive) {
-      if (!isScanningActive) {
-        print("Scan stopped unexpectedly.");
-        isScanning = false;
-        isLoading = false;
-        notifyListeners();
-      }
-    });
+    await FlutterBluePlus.isScanning.where((scanning) => !scanning).first;
+    isScanning = false;
+
+    if (scanResults.isEmpty) {
+      print("No se encontraron dispositivos.");
+    }
+    notifyListeners();
+  }
+
+  // Conectar a un dispositivo
+  Future<void> connectToDevice(BluetoothDevice device) async {
+    isConnecting = true;
+    notifyListeners();
+
+    try {
+      await device.connect();
+      connectedDevice = device;
+      print("Conectado a ${device.name}.");
+    } catch (e) {
+      print("Error al conectar: $e");
+    } finally {
+      isConnecting = false;
+      notifyListeners();
+    }
+  }
+
+  // Desconectar dispositivo
+  Future<void> disconnectDevice() async {
+    if (connectedDevice != null) {
+      await connectedDevice!.disconnect();
+      connectedDevice = null;
+      print("Dispositivo desconectado.");
+      notifyListeners();
+    }
   }
 }
